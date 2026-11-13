@@ -1806,47 +1806,7 @@ class TLParser: NSObject {
         guard let originalId = id(from: message), originalId != 0 else { return }
         let scope = editScope(for: message)
 
-        if isMediaEdit(message) {
-            if let oldMediaId = mediaIdMemoryCache[originalId] {
-                let msgId = originalId
-                let scopeStr = scope
-                let mediaStr = oldMediaId
-                
-                // 【超级防踢】：延迟 15 秒！让 Telegram 把底层的读写全部做完
-                DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 15.0) {
-                    let fm = FileManager.default
-                    let docDir = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
-                    let dir = docDir + "/Lead_Images"
-                    if !fm.fileExists(atPath: dir) { try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil) }
-                    
-                    let cleanScope = scopeStr.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
-                    let safeScope = cleanScope.replacingOccurrences(of: ":", with: "_")
-                    let destPath = dir + "/\(safeScope)_\(msgId)_old.jpg"
-                    
-                    let groupIds = ["group.ph.telegra.Telegraph", "group.com.seastar.turrit"]
-                    for groupId in groupIds {
-                        if let url = fm.containerURL(forSecurityApplicationGroupIdentifier: groupId) {
-                            let sharedDir = url.path + "/telegram-data"
-                            if let accounts = try? fm.contentsOfDirectory(atPath: sharedDir) {
-                                for account in accounts where account.hasPrefix("account-") {
-                                    let mediaDir = sharedDir + "/" + account + "/postbox/media"
-                                    // 不用遍历，直接精准拼路径
-                                    for dcId in 1...5 {
-                                        let fileName = "telegram-cloud-photo-size-\(dcId)-\(mediaStr)-y"
-                                        let srcPath = mediaDir + "/" + fileName
-                                        if fm.fileExists(atPath: srcPath) {
-                                            try? fm.copyItem(atPath: srcPath, toPath: destPath)
-                                            print("[Lead] 15秒后台安全提取完成: \(fileName)")
-                                            return
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // 彻底去掉所有抓图、延迟、遍历逻辑！
 
         if let text = text(from: message), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             recordObservedText(id: originalId, scope: scope, text: text)
