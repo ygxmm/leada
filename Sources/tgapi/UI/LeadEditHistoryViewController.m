@@ -311,9 +311,39 @@ static NSString *LeadHistoryDateText(NSNumber *timestamp) {
   stack.spacing = 8;
   stack.layoutMargins = UIEdgeInsetsMake(48, 12, 0, 12);
   stack.layoutMarginsRelativeArrangement = YES;
-  UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:self.mediaReplaced ? @"photo.on.rectangle" : @"pencil.and.outline"
-                                                                 withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightLight]]];
-  icon.tintColor = UIColor.tertiaryLabelColor;
+  UIView *icon = nil;
+  if (self.mediaReplaced) {
+      NSString *keyStr = nil;
+      if ([self respondsToSelector:NSSelectorFromString(@"editKey")]) keyStr = [self valueForKey:@"editKey"];
+      
+      UIImage *img = nil;
+      if (keyStr.length > 0) {
+          NSString *cleanKey = [keyStr stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@":"]];
+          NSString *safeScope = [cleanKey stringByReplacingOccurrencesOfString:@":" withString:@"_"];
+          NSString *docDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+          NSString *dir = [docDir stringByAppendingPathComponent:@"Lead_Images"];
+          
+          NSString *filePath = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%@_old.jpg", safeScope]];
+          img = [UIImage imageWithContentsOfFile:filePath];
+      }
+      
+      if (img) {
+          UIImageView *imageView = [[UIImageView alloc] initWithImage:img];
+          imageView.contentMode = UIViewContentModeScaleAspectFit;
+          imageView.layer.cornerRadius = 12;
+          imageView.layer.masksToBounds = YES;
+          [imageView.widthAnchor constraintEqualToConstant:200].active = YES;
+          [imageView.heightAnchor constraintEqualToConstant:200].active = YES;
+          icon = imageView;
+      }
+  }
+  
+  if (!icon) {
+      UIImageView *fallback = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:self.mediaReplaced ? @"photo.on.rectangle" : @"pencil.and.outline"
+                                                                     withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:30 weight:UIImageSymbolWeightLight]]];
+      fallback.tintColor = UIColor.tertiaryLabelColor;
+      icon = fallback;
+  }
   UILabel *title = [UILabel new];
   title.text = LeadL(self.mediaReplaced ? @"UI_EDIT_MEDIA" : @"UI_EDIT_EMPTY");
   title.font = LeadFont(17, UIFontWeightSemibold);

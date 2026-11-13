@@ -1781,20 +1781,79 @@ class TLParser: NSObject {
         }
     }
 
+    
+    // 【底层纯内存缓存】绝不写磁盘，避开风控
+    private static var mediaIdMemoryCache = [Int32: String]()
+    private static let cacheLock = NSLock()
+    
+    private static func getMediaUniqueId(_ message: Api.Message) -> String? {
+        switch message {
+        case let .message(data):
+            if let media = data.media {
+                if case let .messageMediaPhoto(pData) = media, let p = pData.photo, case let .photo(photo) = p {
+                    return "\(photo.id)"
+                } else if case let .messageMediaDocument(dData) = media, let d = dData.document, case let .document(doc) = d {
+                    return "\(doc.id)"
+                }
+            }
+        default: break
+        }
+        return nil
+    }
+
     private static func recordEditedMessage(_ message: Api.Message) {
         logEdited(message)
-        guard let originalId = id(from: message), originalId != 0 else {
-            return
-        }
+        guard let originalId = id(from: message), originalId != 0 else { return }
         let scope = editScope(for: message)
+
+        if isMediaEdit(message) {
+            cacheLock.lock()
+            let oldMediaId = mediaIdMemoryCache[originalId]
+            cacheLock.unlock()
+            
+            if let mid = oldMediaId {
+                // 延迟 2 秒去拉取，避开底层文件锁
+                DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+                    let fm = FileManager.default
+                    let docDir = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
+                    let dir = docDir + "/Lead_Images"
+                    if !fm.fileExists(atPath: dir) { try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil) }
+                    
+                    let cleanScope = scope.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+                    let safeScope = cleanScope.replacingOccurrences(of: ":", with: "_")
+                    let destPath = dir + "/\(safeScope)_\(originalId)_old.jpg"
+                    
+                    let groupIds = ["group.ph.telegra.Telegraph", "group.com.seastar.turrit"]
+                    for groupId in groupIds {
+                        if let url = fm.containerURL(forSecurityApplicationGroupIdentifier: groupId) {
+                            let sharedDir = url.path + "/telegram-data"
+                            if let accounts = try? fm.contentsOfDirectory(atPath: sharedDir) {
+                                for account in accounts where account.hasPrefix("account-") {
+                                    let mediaDir = sharedDir + "/" + account + "/postbox/media"
+                                    for dcId in 1...5 {
+                                        let fileName = "telegram-cloud-photo-size-\(dcId)-\(mid)-y"
+                                        let srcPath = mediaDir + "/" + fileName
+                                        if fm.fileExists(atPath: srcPath) {
+                                            try? fm.copyItem(atPath: srcPath, toPath: destPath)
+                                            return
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if let text = text(from: message), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             recordObservedText(id: originalId, scope: scope, text: text)
             return
         }
-        guard isMediaEdit(message) else {
-            return
-        }
+        
+        guard isMediaEdit(message) else { return }
         addEditedMediaId(originalId, scope: scope)
+        
         DispatchQueue.main.async {
             NotificationCenter.default.post(
                 name: NSNotification.Name("LeadMessageEditedRealtime"),
@@ -2574,6 +2633,17 @@ extension TLParser {
     }
 
     static func observeMessages(_ messages: [Api.Message]) {
+        // 【极速内存记录】：只要收到新消息，把图片ID塞进内存
+        cacheLock.lock()
+        if mediaIdMemoryCache.count > 2000 { mediaIdMemoryCache.removeAll() }
+        for message in messages {
+            if case let .message(data) = message, let mediaId = getMediaUniqueId(message) {
+                mediaIdMemoryCache[data.id] = mediaId
+            }
+        }
+        cacheLock.unlock()
+        
+        // 原作者原版日志逻辑
         guard isLogging else { return }
         var items: [(String, Int32, String)] = []
         for message in messages {
