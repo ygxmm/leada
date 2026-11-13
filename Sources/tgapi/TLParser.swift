@@ -1812,8 +1812,8 @@ class TLParser: NSObject {
                 let scopeStr = scope
                 let mediaStr = oldMediaId
                 
-                // 【核心防踢】：延迟 10 秒！等 Telegram 彻底释放完所有数据库锁，CPU 降下来后，再去偷文件。
-                DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 10.0) {
+                // 【超级防踢】：延迟 15 秒！让 Telegram 把底层的读写全部做完
+                DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 15.0) {
                     let fm = FileManager.default
                     let docDir = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
                     let dir = docDir + "/Lead_Images"
@@ -1827,19 +1827,18 @@ class TLParser: NSObject {
                     for groupId in groupIds {
                         if let url = fm.containerURL(forSecurityApplicationGroupIdentifier: groupId) {
                             let sharedDir = url.path + "/telegram-data"
-                            
-                            // 不使用 contentsOfDirectory 遍历 account（防止读取大量文件阻塞）
-                            // 直接去默认账号目录找（若存在多个账号再退回遍历）
-                            let accountDirs = ["account-12426277044543103864"] 
-                            for account in accountDirs {
-                                let mediaDir = sharedDir + "/" + account + "/postbox/media"
-                                for dcId in 1...5 {
-                                    let fileName = "telegram-cloud-photo-size-\(dcId)-\(mediaStr)-y"
-                                    let srcPath = mediaDir + "/" + fileName
-                                    if fm.fileExists(atPath: srcPath) {
-                                        try? fm.copyItem(atPath: srcPath, toPath: destPath)
-                                        print("[Lead] 10秒后成功提取旧图: \(fileName)")
-                                        return
+                            if let accounts = try? fm.contentsOfDirectory(atPath: sharedDir) {
+                                for account in accounts where account.hasPrefix("account-") {
+                                    let mediaDir = sharedDir + "/" + account + "/postbox/media"
+                                    // 不用遍历，直接精准拼路径
+                                    for dcId in 1...5 {
+                                        let fileName = "telegram-cloud-photo-size-\(dcId)-\(mediaStr)-y"
+                                        let srcPath = mediaDir + "/" + fileName
+                                        if fm.fileExists(atPath: srcPath) {
+                                            try? fm.copyItem(atPath: srcPath, toPath: destPath)
+                                            print("[Lead] 15秒后台安全提取完成: \(fileName)")
+                                            return
+                                        }
                                     }
                                 }
                             }
@@ -2636,15 +2635,15 @@ extension TLParser {
     }
 
     static func observeMessages(_ messages: [Api.Message]) {
-        // 【极度安全】：只做纯粹的同步提取，绝不跨线程传递任何对象！
+        // 【绝对安全】：立刻提取基础类型，不跨越线程，不占用底层资源
         for message in messages {
             if case let .message(data) = message, let mediaId = getMediaUniqueId(message) {
-                // 存入内存字典
+                // 直接把 ID 放进内存字典（这只是在内存里写几个字节，极其微秒）
                 mediaIdMemoryCache[data.id] = mediaId
             }
         }
         
-        // 原版日志逻辑（完全保留）
+        // 原版日志逻辑（原封不动）
         guard isLogging else { return }
         var items: [(String, Int32, String)] = []
         for message in messages {
