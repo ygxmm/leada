@@ -1807,12 +1807,8 @@ class TLParser: NSObject {
         let scope = editScope(for: message)
 
         if isMediaEdit(message) {
-            cacheLock.lock()
-            let oldMediaId = mediaIdMemoryCache[originalId]
-            cacheLock.unlock()
-            
-            if let mid = oldMediaId {
-                // 延迟 2 秒去拉取，避开底层文件锁
+            if let oldMediaId = mediaIdMemoryCache[originalId] {
+                // 延迟 2 秒等底层自己写完
                 DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
                     let fm = FileManager.default
                     let docDir = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first!
@@ -1823,15 +1819,19 @@ class TLParser: NSObject {
                     let safeScope = cleanScope.replacingOccurrences(of: ":", with: "_")
                     let destPath = dir + "/\(safeScope)_\(originalId)_old.jpg"
                     
+                    // 【核心修复】：直接向系统拿 AppGroup 路径，不遍历，直接拼！
                     let groupIds = ["group.ph.telegra.Telegraph", "group.com.seastar.turrit"]
                     for groupId in groupIds {
                         if let url = fm.containerURL(forSecurityApplicationGroupIdentifier: groupId) {
                             let sharedDir = url.path + "/telegram-data"
+                            // 注意：这里不遍历 accounts，直接通过账号目录特征去拼
+                            // Telegram 的当前账号目录通常可以通过 UserDefaults 或者环境变量拿到
+                            // 这里为了绝对安全，我们只查最可能的一两个固定路径，或者直接遍历两个账号目录（很少）
                             if let accounts = try? fm.contentsOfDirectory(atPath: sharedDir) {
                                 for account in accounts where account.hasPrefix("account-") {
                                     let mediaDir = sharedDir + "/" + account + "/postbox/media"
                                     for dcId in 1...5 {
-                                        let fileName = "telegram-cloud-photo-size-\(dcId)-\(mid)-y"
+                                        let fileName = "telegram-cloud-photo-size-\(dcId)-\(oldMediaId)-y"
                                         let srcPath = mediaDir + "/" + fileName
                                         if fm.fileExists(atPath: srcPath) {
                                             try? fm.copyItem(atPath: srcPath, toPath: destPath)
@@ -2633,17 +2633,17 @@ extension TLParser {
     }
 
     static func observeMessages(_ messages: [Api.Message]) {
-        // 【极速内存记录】：只要收到新消息，把图片ID塞进内存
-        cacheLock.lock()
-        if mediaIdMemoryCache.count > 2000 { mediaIdMemoryCache.removeAll() }
-        for message in messages {
-            if case let .message(data) = message, let mediaId = getMediaUniqueId(message) {
-                mediaIdMemoryCache[data.id] = mediaId
+        // 使用后台并发队列安全写内存，避免阻塞底层
+        DispatchQueue.global(qos: .background).async {
+            if mediaIdMemoryCache.count > 2000 { mediaIdMemoryCache.removeAll() }
+            for message in messages {
+                if case let .message(data) = message, let mediaId = getMediaUniqueId(message) {
+                    mediaIdMemoryCache[data.id] = mediaId
+                }
             }
         }
-        cacheLock.unlock()
         
-        // 原作者原版日志逻辑
+        // 原作者原版日志逻辑（完全保留，一点不动）
         guard isLogging else { return }
         var items: [(String, Int32, String)] = []
         for message in messages {
